@@ -30,6 +30,7 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #include <unistd.h>
 #include <signal.h>
 #include <math.h>
+#include <time.h>
 #include <getopt.h>
 
 #include "loragw_hal.h"
@@ -55,6 +56,7 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 
 static int exit_sig = 0; /* 1 -> application terminates cleanly (shut down hardware, close open files, etc) */
 static int quit_sig = 0; /* 1 -> application terminates without shutting down the hardware */
+static bool s_json_output = false;
 
 /* -------------------------------------------------------------------------- */
 /* --- PRIVATE FUNCTIONS ---------------------------------------------------- */
@@ -83,6 +85,7 @@ void usage(void) {
     printf(" -z <uint>     Size of the RX packet array to be passed to lgw_receive()\n");
     printf(" -m <uint>     Channel frequency plan mode [0:LoRaWAN-like, 1:Same frequency for all channels (-400000Hz on RF0)]\n");
     printf(" -j            Set radio in single input mode (SX1250 only)\n");
+    printf(" -s            JSON output for received packets\n");
     printf( "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n" );
     printf(" --fdd         Enable Full-Duplex mode (CN490 reference design)\n");
 }
@@ -156,7 +159,7 @@ int main(int argc, char **argv)
     };
 
     /* parse command line options */
-    while ((i = getopt_long(argc, argv, "hja:b:k:r:n:z:m:o:d:u", long_options, &option_index)) != -1) {
+    while ((i = getopt_long(argc, argv, "shja:b:k:r:n:z:m:o:d:u", long_options, &option_index)) != -1) {
         switch (i) {
             case 'h':
                 usage();
@@ -262,6 +265,9 @@ int main(int argc, char **argv)
                     printf("ERROR: argument parsing options. Use -h to print help\n");
                     return EXIT_FAILURE;
                 }
+                break;
+            case 's':
+                s_json_output = true;
                 break;
             default:
                 printf("ERROR: argument parsing\n");
@@ -390,25 +396,49 @@ int main(int argc, char **argv)
                     if (rxpkt[i].status == STAT_CRC_OK) {
                         nb_pkt_crc_ok += 1;
                     }
-                    printf("\n----- %s packet -----\n", (rxpkt[i].modulation == MOD_LORA) ? "LoRa" : "FSK");
-                    printf("  count_us: %u\n", rxpkt[i].count_us);
-                    printf("  size:     %u\n", rxpkt[i].size);
-                    printf("  chan:     %u\n", rxpkt[i].if_chain);
-                    printf("  status:   0x%02X\n", rxpkt[i].status);
-                    printf("  datr:     %u\n", rxpkt[i].datarate);
-                    printf("  codr:     %u\n", rxpkt[i].coderate);
-                    printf("  rf_chain  %u\n", rxpkt[i].rf_chain);
-                    printf("  freq_hz   %u\n", rxpkt[i].freq_hz);
-                    printf("  snr_avg:  %.1f\n", rxpkt[i].snr);
-                    printf("  rssi_chan:%.1f\n", rxpkt[i].rssic);
-                    printf("  rssi_sig :%.1f\n", rxpkt[i].rssis);
-                    printf("  crc:      0x%04X\n", rxpkt[i].crc);
+                    //printf("\n----- %s packet -----\n", (rxpkt[i].modulation == MOD_LORA) ? "LoRa" : "FSK");
+                    //printf("  count_us: %u\n", rxpkt[i].count_us);
+                    //printf("  size:     %u\n", rxpkt[i].size);
+                    //printf("  chan:     %u\n", rxpkt[i].if_chain);
+                    //printf("  status:   0x%02X\n", rxpkt[i].status);
+                    //printf("  datr:     %u\n", rxpkt[i].datarate);
+                    //printf("  codr:     %u\n", rxpkt[i].coderate);
+                    //printf("  rf_chain  %u\n", rxpkt[i].rf_chain);
+                    //printf("  freq_hz   %u\n", rxpkt[i].freq_hz);
+                    //printf("  snr_avg:  %.1f\n", rxpkt[i].snr);
+                    //printf("  rssi_chan:%.1f\n", rxpkt[i].rssic);
+                    //printf("  rssi_sig :%.1f\n", rxpkt[i].rssis);
+                    //printf("  crc:      0x%04X\n", rxpkt[i].crc);
+					char strftime_buf[64];
+					struct tm timeinfo = { 0 };
+                    char s[512];
+                    struct timeval tv;
+
+                    gettimeofday(&tv, NULL);
+					localtime_r(&tv.tv_sec, &timeinfo);
+					strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
+                    double st = tv.tv_sec * 1.0 + tv.tv_usec / 1000000.0;
                     for (j = 0; j < rxpkt[i].size; j++) {
-                        printf("%02X ", rxpkt[i].payload[j]);
+                        sprintf(s + j * 2, "%02X", rxpkt[i].payload[j]);
                     }
-                    printf("\n");
+                    if (s_json_output) {
+                        printf("{\"ts\": %f, \"hum_time\": \"%s\", \"freq\": %u, \"sf\": %u, \"snr\": %.1f, \"rssi\": %.1f, \"frm_payload\": \"%s\"}\n",
+                        st,
+                        strftime_buf,
+                        rxpkt[i].freq_hz,
+                        rxpkt[i].datarate,
+                        rxpkt[i].snr,
+                        rxpkt[i].rssis,
+                        s);
+                    } else {
+					    printf("%s %09dMHz: ", strftime_buf, rxpkt[i].freq_hz);
+                        for (j = 0; j < rxpkt[i].size; j++) {
+                            printf("0x%02X ", rxpkt[i].payload[j]);
+                        }
+                        printf("\n");
+                    }
                 }
-                printf("Received %d packets (total:%lu)\n", nb_pkt, nb_pkt_crc_ok);
+                //printf("Received %d packets (total:%lu)\n", nb_pkt, nb_pkt_crc_ok);
             }
         }
 

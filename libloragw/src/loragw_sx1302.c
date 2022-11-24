@@ -127,6 +127,9 @@ rx_buffer_t rx_buffer;
 /* Internal timestamp counter */
 timestamp_counter_t counter_us;
 
+/* configuration parameter: invert IQ */
+#define INVERTIQ
+
 /* -------------------------------------------------------------------------- */
 /* --- PRIVATE FUNCTIONS DECLARATION ---------------------------------------- */
 
@@ -986,6 +989,11 @@ int sx1302_lora_modem_configure(uint32_t radio_freq_hz) {
     /* DFT peak mode : set to AUTO, check timestamp_counter_correction() if changed */
     err |= lgw_reg_w(SX1302_REG_RX_TOP_RX_CFG0_DFT_PEAK_EN, RX_DFT_PEAK_MODE_AUTO);
 
+    /* Chirp invert */
+    #ifdef INVERTIQ
+    err |= lgw_reg_w(SX1302_REG_RX_TOP_RX_CFG0_CHIRP_INVERT, 0);
+    #endif
+
     return err;
 }
 
@@ -1082,6 +1090,10 @@ int sx1302_lora_service_modem_configure(struct lgw_conf_rxif_s * cfg, uint32_t r
 
     /* DFT peak mode : set to AUTO, check timestamp_counter_correction() if changed */
     err |= lgw_reg_w(SX1302_REG_RX_TOP_LORA_SERVICE_FSK_RX_CFG0_DFT_PEAK_EN, RX_DFT_PEAK_MODE_AUTO);
+
+    #ifdef INVERTIQ
+    err |= lgw_reg_w(SX1302_REG_RX_TOP_RX_CFG0_CHIRP_INVERT, 0);
+    #endif
 
     return err;
 }
