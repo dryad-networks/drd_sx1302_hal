@@ -37,6 +37,17 @@ License: Revised BSD License, see LICENSE.TXT file include in the project
 #include "loragw_reg.h"
 #include "loragw_aux.h"
 
+#include <sys/socket.h>     /* socket specific definitions */
+#include <netinet/in.h>     /* INET constants and stuff */
+#include <arpa/inet.h>      /* IP address conversion stuff */
+#include <netdb.h>          /* gai_strerror */
+
+
+static uint16_t s_udpPort = 0;
+static char s_udpDest[512];
+static struct sockaddr_in s_cliaddr;
+
+
 /* -------------------------------------------------------------------------- */
 /* --- PRIVATE MACROS ------------------------------------------------------- */
 
@@ -69,6 +80,21 @@ static void sig_handler(int sigio) {
     }
 }
 
+static int openSocket(char *serv_addr, uint16_t serv_port_up)
+{
+    int sock;
+
+    if ( (sock = socket(AF_INET, SOCK_DGRAM, 0)) < 0 ) { 
+        perror("socket creation failed"); 
+        exit(EXIT_FAILURE); 
+    }
+    memset(&s_cliaddr, 0, sizeof(s_cliaddr));
+    s_cliaddr.sin_family = AF_INET;
+    s_cliaddr.sin_addr.s_addr = inet_addr(serv_addr);
+    s_cliaddr.sin_port = htons(serv_port_up);
+    return sock;
+}
+
 void usage(void) {
     printf("Library version information: %s\n", lgw_version_info());
     printf("Available options:\n");
@@ -86,6 +112,8 @@ void usage(void) {
     printf(" -m <uint>     Channel frequency plan mode [0:LoRaWAN-like, 1:Same frequency for all channels (-400000Hz on RF0)]\n");
     printf(" -j            Set radio in single input mode (SX1250 only)\n");
     printf(" -s            JSON output for received packets\n");
+    printf(" -e            target UDP server address\n");
+    printf(" -p            target UDP port\n");
     printf( "~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n" );
     printf(" --fdd         Enable Full-Duplex mode (CN490 reference design)\n");
 }
@@ -159,7 +187,7 @@ int main(int argc, char **argv)
     };
 
     /* parse command line options */
-    while ((i = getopt_long(argc, argv, "shja:b:k:r:n:z:m:o:d:u", long_options, &option_index)) != -1) {
+    while ((i = getopt_long(argc, argv, "shje:p:a:b:k:r:n:z:m:o:d:u", long_options, &option_index)) != -1) {
         switch (i) {
             case 'h':
                 usage();
@@ -269,6 +297,26 @@ int main(int argc, char **argv)
             case 's':
                 s_json_output = true;
                 break;
+            case 'p':
+                i = sscanf(optarg, "%u", &arg_u);
+                if (i != 1) {
+                    printf("ERROR: argument parsing of -p argument. Use -h to print help\n");
+                    return EXIT_FAILURE;
+                } else {
+                    s_udpPort = arg_u;
+                }
+                break;
+                
+            case 'e':
+                if (! optarg || optarg[0] == 0) {
+                    printf("ERROR: argument parsing of -e argument. Use -h to print help\n");
+                    return EXIT_FAILURE;
+                } else {
+                    memset(s_udpDest, 0, sizeof(s_udpDest));
+                    strncpy(s_udpDest, optarg, sizeof(s_udpDest) - 1);
+                }
+                break;
+
             default:
                 printf("ERROR: argument parsing\n");
                 usage();
@@ -356,6 +404,15 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
+    int sck = openSocket(s_udpDest, s_udpPort);
+    #if 0
+    printf("sck: %d\n", sck);
+    const char b[] = "blablablaaaa\n";
+    if (sendto(sck, b, sizeof(b), 0, &s_cliaddr, sizeof(s_cliaddr)) < 0) {
+        fprintf(stderr, "Error in sendto()\n");
+        return EXIT_FAILURE;
+    } 
+    #endif //0
     /* set the buffer size to hold received packets */
     struct lgw_pkt_rx_s rxpkt[max_rx_pkt];
     printf("INFO: rxpkt buffer size is set to %u\n", max_rx_pkt);
@@ -410,10 +467,13 @@ int main(int argc, char **argv)
                     //printf("  rssi_sig :%.1f\n", rxpkt[i].rssis);
                     //printf("  crc:      0x%04X\n", rxpkt[i].crc);
 					char strftime_buf[64];
+                    char outBuf[1024];
 					struct tm timeinfo = { 0 };
                     char s[512];
                     struct timeval tv;
 
+                    memset(outBuf, 0, sizeof(outBuf));
+                    memset(s, 0, sizeof(s));
                     gettimeofday(&tv, NULL);
 					localtime_r(&tv.tv_sec, &timeinfo);
 					strftime(strftime_buf, sizeof(strftime_buf), "%c", &timeinfo);
@@ -422,20 +482,26 @@ int main(int argc, char **argv)
                         sprintf(s + j * 2, "%02X", rxpkt[i].payload[j]);
                     }
                     if (s_json_output) {
-                        printf("{\"ts\": %f, \"hum_time\": \"%s\", \"freq\": %u, \"sf\": %u, \"snr\": %.1f, \"rssi\": %.1f, \"frm_payload\": \"%s\"}\n",
-                        st,
-                        strftime_buf,
-                        rxpkt[i].freq_hz,
-                        rxpkt[i].datarate,
-                        rxpkt[i].snr,
-                        rxpkt[i].rssis,
-                        s);
+                        snprintf(
+                            outBuf,
+                            sizeof(outBuf),"{\"ts\": %f, \"hum_time\": \"%s\", \"freq\": %u, \"sf\": %u, \"snr\": %.1f, \"rssi\": %.1f, \"frm_payload\": \"%s\"}\n",
+                            st,
+                            strftime_buf,
+                            rxpkt[i].freq_hz,
+                            rxpkt[i].datarate,
+                            rxpkt[i].snr,
+                            rxpkt[i].rssis,
+                            s);
                     } else {
-					    printf("%s %09dMHz: ", strftime_buf, rxpkt[i].freq_hz);
-                        for (j = 0; j < rxpkt[i].size; j++) {
-                            printf("0x%02X ", rxpkt[i].payload[j]);
+					    snprintf(outBuf, sizeof(outBuf), "%s %09dMHz: %s\n", strftime_buf, rxpkt[i].freq_hz, s);
+                    }
+                    if (s_udpPort) {
+                        if (sendto(sck, outBuf, strlen(outBuf), 0, &s_cliaddr, sizeof(s_cliaddr)) < 0) {
+                            fprintf(stderr, "Error in sendto()\n");
+                            return EXIT_FAILURE;
                         }
-                        printf("\n");
+                    } else {
+                        printf("%s", outBuf);
                     }
                 }
                 //printf("Received %d packets (total:%lu)\n", nb_pkt, nb_pkt_crc_ok);
